@@ -1,0 +1,1383 @@
+---
+title: "Hawaii Wastewater Viral Activity Report"
+author: "Hawaii Department of Health"
+date: "2026-04-21"
+output: html_document
+---
+
+```{r}
+# ============================================================
+# WVAL SCRIPT - SIMPLIFIED / ANNOTATED R SCRIPT
+# Based on the uploaded "WVAL R Code Translation" text
+#
+# IMPORTANT:
+# - This is plain R script format (.R), not R Markdown and not Python.
+# - I added clear notes and searchable markers so your team can find 
+# where to plug in jurisdiction data.
+# - SEARCH FOR: TODO_HAWAII_DATA
+# - SEARCH FOR: TODO_OPTIONAL_LOCAL_RULE
+# - SEARCH FOR: TODO_CHECK_IF_APPLIES
+#
+# ============================================================
+
+
+# ============================================================
+# 0) LOAD LIBRARIES
+# ============================================================
+# These are the packages referenced in the uploaded script.
+# Note:
+# - data.table is used inside prioritize_sars_targets(), so it is added here
+#   because the visible script uses it even though it was not loaded above.
+# ============================================================
+
+library(pacman)
+p_load(
+  tidyverse,
+  lubridate,
+  zoo,
+  slider,
+  stringr,
+  ggplot2,
+  data.table,
+)
+```
+
+
+```{r}
+# ============================================================
+# 1) READ IN YOUR DATA
+# ============================================================
+# SEARCH KEYWORD: TODO_HAWAII_DATA
+#
+# Replace the example path below with your file path, OR replace the
+# read_csv() line with however your team normally loads data.
+#
+# The goal is to end up with a data frame called: hawaii_dataset
+# ============================================================
+
+# TODO_HAWAII_DATA: ENTER YOUR DATA HERE
+# Example: this will need to be changed for each person, i didn't realize it would be complicated to get a file from share point
+ hawaii_dataset <- read_csv("C:/Users/jessica.freely/OneDrive - State of Hawaii/Desktop/WW Epi/DSTT Cohort 6/GitHub/WVAL_Hawaii_GitHub/contour-export-NWSS-Analyzed-CDC-Commercial-Export.csv")
+
+# Example placeholder only:
+# hawaii_dataset <- read_csv("file_path.csv")
+```
+#Filter out:
+ 
+** Pcr_target_avg_conc = NA or blank omit
+** Pcr_target_flowpop_lin =  NA and blank omit
+ 
+Filter date to = "Today" Date 
+```{r}
+hawaii_dataset_clean <- hawaii_dataset %>%
+  mutate(sample_collect_date = as.Date(sample_collect_date)) %>% 
+  filter(
+    !is.na(pcr_target_avg_conc) & pcr_target_avg_conc != "",
+    !is.na(pcr_target_flowpop_lin) & pcr_target_flowpop_lin != "",
+    sample_collect_date <= Sys.Date()
+  )
+
+
+```
+
+Trouble shooting for accurate data count
+```{r}
+ 
+omitted_df <- hawaii_dataset %>%
+  mutate(sample_collect_date = as.Date(sample_collect_date)) %>%
+  filter(
+    is.na(pcr_target_avg_conc) | pcr_target_avg_conc == "" |
+    is.na(pcr_target_flowpop_lin) | pcr_target_flowpop_lin == "" |
+    sample_collect_date > Sys.Date()   # future dates
+  )
+ 
+print(omitted_df)
+```
+
+
+
+```{r}
+# ============================================================
+# 2) PREP / STANDARDIZE YOUR JURISDICTION DATA
+# ============================================================
+# What this section does:
+# - renames columns if your local columns do not match expected names
+# - converts dates
+# - lowercases pathogen fields
+# - builds a same-day/site key used later for SARS target prioritization
+# - keeps only WVAL respiratory targets
+# - keeps the columns the downstream functions expect
+#
+# SEARCH KEYWORD: TODO_HAWAII_DATA
+# This is the main place your team will likely edit first.
+# ============================================================
+
+data <- hawaii_dataset_clean %>%
+
+  # ------------------------------------------------------------
+  # TODO_HAWAII_DATA:
+  # If your columns already match the names used below, leave this OFF.
+  # If your columns have different names, uncomment and edit this block.
+  # ------------------------------------------------------------
+  # rename(
+  #   site_id = sample_site_id,
+  #   source = funding,
+  #   lab_id = micro_lab_name,
+  #   wwtp_name = sample_site_name,
+  #   population_served = totalpop,
+  #   county_names = county
+  # ) %>%
+
+  # Convert sample collection date into an R Date object.
+  # The original script allows both month-day-year and year-month-day style.
+  # Example entered: "04/15/2024"
+  # Need: "2024-04-15"
+  mutate(
+    sample_collect_date = as.Date(
+      lubridate::parse_date_time(sample_collect_date, orders = c("mdY", "Ymd"))
+    )
+  ) %>%
+
+  # Lowercase pathogen names and gene target names
+  # so matching later is consistent.
+  mutate(
+    pcr_target = tolower(pcr_target),
+  #  pcr_gene_target = tolower(pcr_gene_target)
+  ) %>%
+
+  # Build a same-site / same-day key used by the SARS gene-target logic.
+  # Example "Hawaii_WWTP1_wwtp_na_wastewater_sars-cov-2_2024-04-01"
+  mutate(
+    key_plot_with_pcr_by_day = paste(
+      wwtp_jurisdiction,
+      wwtp_name,
+      sample_location,
+      sample_location_specify,
+      sample_matrix,
+      pcr_target,
+      sample_collect_date,
+      sep = "_"
+    )
+  ) %>%
+
+  # Keep only the respiratory targets supported by this WVAL method.
+  filter(pcr_target %in% c("fluav", "rsv", "sars-cov-2")) %>%
+
+  # Keep the fields the downstream code expects.
+  select(
+    wwtp_jurisdiction,
+    source,
+    lab_id,
+    site_id,
+    wwtp_name,
+    population_served,
+    sample_id,
+    sample_collect_date,
+    pcr_target,
+    # pcr_gene_target,
+    pcr_target_avg_conc,
+    pcr_target_flowpop_lin, #normalize by flow rate and population
+    lod_sewage,
+    county_names,
+    concentration_method,
+    extraction_method,
+    major_lab_method,
+    key_plot_with_pcr_by_day,
+  ) %>%
+
+  # Drop rows missing concentration.
+  filter(!is.na(pcr_target_avg_conc))
+```
+
+
+```{r}
+# ============================================================
+# 3) SARS-CoV-2 SPECIAL HANDLING **we dont need step 3 we have just one gene target (n) for sars-cov-2
+# ============================================================
+# What this section does:
+# A) If multiple SARS gene targets exist for the same site/day,
+#    keep the preferred one using CDC-style ranking.
+# B) If both N1 and N2 exist for the same sample_id,
+#    combine them using a geometric mean.
+#
+# These rules are only needed if your jurisdiction actually has
+# multiple SARS targets or paired N1/N2 data.
+# ============================================================
+
+
+# ------------------------------------------------------------
+# 3A) PRIORITIZE SARS GENE TARGETS
+# ------------------------------------------------------------
+# Plain English:
+# If one site/day has multiple SARS gene targets, keep the preferred one.
+# The ranking in the original script is:
+#   1 = N targets
+#   2 = ORF1
+#   3 = E
+#   4 = RdRP
+#   5 = S
+#   6 = TaqPath S
+#  99 = anything else / unrecognized
+#
+# SEARCH KEYWORD: TODO_CHECK_IF_APPLIES
+# ------------------------------------------------------------
+
+# prioritize_sars_targets <- function(data) {
+
+ # dt <- data.table(data)
+
+ # non_sarscov2_dt <- dt[pcr_target != "sars-cov-2", ]
+ # sarscov2_dt     <- dt[pcr_target == "sars-cov-2", ]
+
+  # Assign a numeric rank to each SARS target.
+ # sarscov2_dt[, gene_rank := fcase(
+   #pcr_gene_target == "n", 1,
+  #grepl("n1|n2|n3|n1 and n2 combined|ddcov_n", pcr_gene_target, ignore.case = TRUE), 1,
+  #grepl("orf1", pcr_gene_target, ignore.case = TRUE), 2,
+   #grepl("e_sarbeco|ddcov_e", pcr_gene_target, ignore.case = TRUE), 3,
+    #grepl("rdrp", pcr_gene_target, ignore.case = TRUE), 4,
+    #pcr_gene_target == "s", 5,
+    #grepl("taqpath s", pcr_gene_target, ignore.case = TRUE), 6,
+    #default = 99
+  #)]
+
+  # For each site/day key, keep the lowest (best) rank.
+  #sarscov2_dt <- sarscov2_dt[
+   # , .SD[gene_rank == min(gene_rank, na.rm = TRUE)],
+    #by = .(key_plot_with_pcr_by_day)]
+
+  #sarscov2_dt[, gene_rank := NULL]
+
+  #data <- as.data.frame(rbind(non_sarscov2_dt, sarscov2_dt))
+  #return(data)}
+
+
+# ------------------------------------------------------------
+# 3B) COMBINE N1 / N2 INTO ONE SARS VALUE
+# ------------------------------------------------------------
+# Plain English:
+# If the same sample_id has both N1 and N2, combine them into one row.
+# If at least one is above the LOD, use the geometric mean of the
+# concentrations. Otherwise, use LOD/2.
+#
+# SEARCH KEYWORD: TODO_CHECK_IF_APPLIES
+# ------------------------------------------------------------
+
+#calc_n1n2_avg <- function(data) {
+
+  #samples_with_both <- data %>%
+    #filter(
+      #pcr_target == "sars-cov-2",
+      #pcr_gene_target %in% c("n1", "n2")
+    #) %>%
+    #group_by(sample_id) %>%
+    #summarise(n_gene_targets = n_distinct(pcr_gene_target), .groups = "drop") %>%
+    #filter(n_gene_targets == 2) %>%
+    #pull(sample_id)
+
+  #sars_averaged <- data %>%
+    #filter(sample_id %in% samples_with_both) %>%
+    #group_by(sample_id) %>%
+    #reframe(
+      #avg_lod = mean(lod_sewage, na.rm = TRUE),
+      #n_above_lod = sum(pcr_target_flowpop_lin >= lod_sewage, na.rm = TRUE),
+      #pcr_target_flowpop_lin = if_else(
+        #n_above_lod > 0,
+        #10^(mean(log10(pcr_target_flowpop_lin), na.rm = TRUE)),
+        #avg_lod / 2
+      #),
+      #lod_sewage = avg_lod,
+      #pcr_gene_target_agg = "n2 and n1"
+    #) %>%
+    #ungroup() %>%
+    #distinct(sample_id, .keep_all = TRUE) %>%
+    #select(-avg_lod, -n_above_lod)
+
+  #sars_individual <- data %>%
+    #filter(!sample_id %in% samples_with_both) %>%
+    #mutate(pcr_gene_target_agg = pcr_gene_target)
+
+  #final_result <- bind_rows(sars_averaged, sars_individual)
+
+  #return(final_result)}
+
+
+# ------------------------------------------------------------
+# APPLY SARS-SPECIFIC FUNCTIONS
+# ------------------------------------------------------------
+# TODO_CHECK_IF_APPLIES:
+# - If your jurisdiction never had multiple SARS gene targets,
+#   you may not need prioritize_sars_targets().
+# - If your jurisdiction does not have paired N1/N2 sample rows,
+#   you may not need calc_n1n2_avg().
+# ------------------------------------------------------------
+
+#data <- data %>%
+ # prioritize_sars_targets() %>%
+  #calc_n1n2_avg()
+```
+
+
+```{r}
+# ============================================================
+# 4) HELPER FUNCTIONS
+# ============================================================
+# These are small utility functions used later by the WVAL logic.
+# ============================================================
+
+
+# ------------------------------------------------------------
+# 4A) APPROXIMATE QUANTILE
+# ------------------------------------------------------------
+# Used to imitate PySpark-style quantile behavior.
+# what the function does quantile_approx(x, p)
+#   Give me the value at the p-th percentile of this data
+# PySpark does not interpolate the same way R does
+# ------------------------------------------------------------
+
+quantile_approx <- function(x, p) {
+  x <- sort(x) #sort the data 
+
+  if (!length(x) || all(is.na(x))) return(NA_real_) #handle edge cases, if data is empty return NA 
+  if (p >= 1) return(x[length(x)]) #if asking for the 100th percentile, return max value 
+
+  i_x <- p * (length(x) - 1) + 1 #find position in the sorted list where the percentile sits
+  x[floor(i_x)] #round down and grab that lower index value 
+}
+
+
+# ------------------------------------------------------------
+# 4B) DAYS TO RECALCULATION TARGET DATES
+# ------------------------------------------------------------
+# SARS-CoV-2 baseline recalculates around:
+#   - April 1
+#   - October 1
+#
+# Flu A / RSV baseline recalculates around:
+#   - August 1
+# 
+# ------------------------------------------------------------
+
+calc_days_to_target_sars <- function(date) {
+  date    <- as.Date(date)
+  y       <- year(date)
+  april_1 <- as.Date(sprintf("%d-04-01", y))
+  oct_1   <- as.Date(sprintf("%d-10-01", y))
+  m       <- month(date)
+
+# How many days is this sample date from the nearest baseline recalculation date?
+  
+  if (m >= 4 && m <= 9) {    #Is the month between April (4) and September (9)?
+    abs(as.integer(difftime(date, april_1, units = "days"))) #how many days from April 1
+  } else {
+    abs(as.integer(difftime(date, oct_1, units = "days"))) #how many days from Oct  1
+  }
+}
+
+calc_days_to_target_flu_rsv <- function(date) {
+  date <- as.Date(date)
+  y    <- year(date)
+  aug1 <- as.Date(sprintf("%d-08-01", y))
+  augN <- as.Date(sprintf("%d-08-01", y + 1))
+
+  pmin(
+    abs(as.integer(difftime(date, aug1, units = "days"))),
+    abs(as.integer(difftime(date, augN, units = "days")))
+  )
+}
+
+
+# ------------------------------------------------------------
+# 4C) OPTIONAL PLOT KEY HELPER
+# ------------------------------------------------------------
+# Function for creating key for plots
+# Use it only if it helps your local workflow.
+# ------------------------------------------------------------
+
+make_key_plot_with_pcr <- function(df) {
+  kp <- paste(
+    coalesce(tolower(df$wwtp_jurisdiction), ""),
+    coalesce(tolower(df$wwtp_name), ""),
+    coalesce(df$sample_location, ""),
+    coalesce(df$sample_matrix, ""),
+    coalesce(as.character(df$major_lab_method), ""),
+    sep = "-"
+  )
+
+  kp <- str_replace_all(kp, "-{2,}", "-")
+  kp <- str_replace_all(kp, "^-+|-+$", "")
+
+  kp
+}
+
+
+# ------------------------------------------------------------
+# 4D) REMOVE OUTLIERS
+# ------------------------------------------------------------
+# The script removes extreme outliers using z-score > 4 within each
+# site/pathogen/source/method combination.
+# ------------------------------------------------------------
+
+remove_outliers <- function(data) {
+  # calculate mean and standard deviation for each site_lab_norm combo
+  mean_std_ln <- data %>%
+    group_by(site_id_with_pcr_source_mlm) %>%
+    summarise(
+      mean_avg_conc_ln = mean(pcr_target_flowpop_lin_ln, na.rm = TRUE),
+      stddev_avg_conc_ln = sd(pcr_target_flowpop_lin_ln, na.rm = TRUE)) 
+  
+  clean_df <- left_join(data, mean_std_ln, by = "site_id_with_pcr_source_mlm")
+  
+  # set z-score threshold
+  z_score_threshold <- 4
+  
+  # calculate and filter the Z-score, handling NA stddev and division by zero
+  clean_df <- clean_df %>%
+    mutate(z_score = ifelse((is.na(stddev_avg_conc_ln) | stddev_avg_conc_ln == 0), 0, # assign a z-score to ensure rows won't be removed
+                            abs(pcr_target_flowpop_lin_ln - mean_avg_conc_ln) / stddev_avg_conc_ln))
+  
+  # store outliers
+  outliers <- clean_df %>%
+    filter(z_score > z_score_threshold)
+  
+  # filter out outliers based on the z-score threshold
+  clean_df <- clean_df %>% 
+    filter((z_score <= z_score_threshold) | is.na(z_score)) %>%
+    select(-mean_avg_conc_ln, -stddev_avg_conc_ln, -z_score)
+  return(clean_df)
+}
+
+
+# ------------------------------------------------------------
+# 4E) TURN NUMERIC WVAL INTO CATEGORY LABELS
+# ------------------------------------------------------------
+# This function converts numeric wastewater viral activity (WVAL) values into 
+# categorical levels—Very Low, Low, Moderate, High, or Very High—based on predefined 
+# thresholds. 
+# 
+# The cutoff ranges differ for SARS-CoV-2, Influenza A, and RSV, with each pathogen 
+# having its own scale for assigning these categories.
+# ------------------------------------------------------------
+
+categorize_wval <- function(ww_index, target) {
+  t   <- tolower(target)
+  out <- rep(NA_character_, length(ww_index))
+
+  is_sars <- stringr::str_detect(t, "sars")
+  is_flu  <- stringr::str_detect(t, "fluav")
+  is_rsv  <- stringr::str_detect(t, "rsv")
+
+  out[is_sars] <- as.character(cut(
+    ww_index[is_sars],
+    breaks = c(-Inf, 2.0, 3.4, 5.3, 7.8, Inf),
+    labels = c("Very Low", "Low", "Moderate", "High", "Very High"),
+    right  = TRUE
+  ))
+
+  out[is_flu] <- as.character(cut(
+    ww_index[is_flu],
+    breaks = c(-Inf, 2.7, 6.2, 11.2, 17.6, Inf),
+    labels = c("Very Low", "Low", "Moderate", "High", "Very High"),
+    right  = TRUE
+  ))
+
+  out[is_rsv] <- as.character(cut(
+    ww_index[is_rsv],
+    breaks = c(-Inf, 2.5, 5.2, 8, 11, Inf),
+    labels = c("Very Low", "Low", "Moderate", "High", "Very High"),
+    right  = TRUE
+  ))
+
+  out
+}
+```
+
+
+```{r}
+# ============================================================
+# 5) MAIN WVAL FUNCTION
+# ============================================================
+# What this function does:
+# 1) filters to one pathogen
+# 2) handles below-LOD values
+# 3) creates log transforms
+# 4) builds site/pathogen/source/method IDs
+# 5) adjusts for long gaps in method history
+# 6) removes outliers
+# 7) calculates distance to baseline recalculation dates
+# 8) calculates baseline and standard deviation
+# 9) calculates wastewater viral activity index values
+# 10) handles overlapping major lab methods
+# 11) assigns WVAL categories
+# 12) aggregates results to the site-week level
+#
+# Final output:
+# One row per site per week with:
+# - numeric weekly WVAL value
+# - weekly WVAL category
+# ============================================================
+
+wval_v2 <- function(data, target) {
+  
+  # =========================================================
+  # STEP 1: FILTER + CLEAN CONCENTRATIONS
+  # =========================================================
+  # Goal:
+  # - Keep only one pathogen (SARS, Flu, or RSV)
+  # - Fix values below detection limit (LOD)
+  # - Create log versions for later math
+  #
+  # WHY:
+  # WVAL is based on log-transformed data and requires
+  # consistent handling of low/undetected values
+  # =========================================================
+  
+  all_final <- data %>%
+    filter(pcr_target == target & population_served >= 3000) %>%
+    mutate(
+      # Mark if value is below detection limit
+      pcr_target_below_lod = if_else(pcr_target_avg_conc < lod_sewage, "yes", "no"), #question for Dr. Turner LOD with normalized concentration
+      
+      # Mark if detected
+      pcr_target_detect    = if_else(pcr_target_avg_conc < lod_sewage, "no", "yes"),
+      
+      # Replace below-LOD values with LOD/2 (standard practice)
+      pcr_target_avg_conc_lin = if_else(
+        pcr_target_below_lod == "yes",
+        lod_sewage / 2,
+        pcr_target_avg_conc
+      ),
+      
+      # Log10 version (used in some calculations)
+      pcr_target_avg_conc_log10 = if_else(
+        pcr_target_below_lod == "yes",
+        log10(lod_sewage / 2),
+        log10(pcr_target_avg_conc_lin)
+      ),
+      
+      # Natural log version (used for WVAL math)
+      pcr_target_avg_conc_ln = log(pcr_target_avg_conc_lin),
+      
+      # Extract year from date
+      year = year(sample_collect_date)
+    )
+  
+  
+  # =========================================================
+  # STEP 2: CREATE "SERIES" (SITE + METHOD GROUPINGS)
+  # =========================================================
+  # Goal:
+  # - Define what counts as one continuous dataset
+  # - Handle changes in lab methods over time
+  #
+  # WHY:
+  # WVAL must be calculated separately for each:
+  #   site + pathogen + source + lab method
+  # =========================================================
+  
+  all_final1 <- all_final %>%
+    
+    # OPTIONAL FILTERS (only if your jurisdiction uses them)
+    # TODO_OPTIONAL_LOCAL_RULE
+    
+    group_by(site_id, source, major_lab_method) %>%
+    arrange(desc(sample_collect_date), .by_group = TRUE) %>%
+    
+    # --------------------------------------------------------
+  # Handle long gaps (> 365 days)
+  #
+  # If there's a big gap in data, treat it like a new "era"
+  # by slightly changing the lab method value (e.g., +0.1)
+  #
+  # WHY:
+  # Prevents mixing old and new data into one baseline
+  # --------------------------------------------------------
+  mutate(
+    sample_collect_date = as.Date(sample_collect_date),
+    date_diff = as.numeric(abs(sample_collect_date - lag(sample_collect_date))),
+    is_gap_start = case_when(
+      is.na(date_diff)   ~ 0,
+      date_diff <= 365   ~ 0,
+      date_diff > 365    ~ 1
+    ),
+    cumsum_gaps = cumsum(na.omit(is_gap_start)),
+    major_lab_method = as.numeric(major_lab_method),
+    mlm_increment = if_else(cumsum_gaps > 0, cumsum_gaps * 0.1, 0),
+    major_lab_method = if_else(
+      cumsum_gaps > 0,
+      major_lab_method + mlm_increment,
+      major_lab_method
+    )
+  ) %>%
+    
+    # Clean up helper columns
+    ungroup() %>%
+    select(-date_diff, -is_gap_start, -cumsum_gaps, -mlm_increment) %>%
+    
+    # Drop missing key fields
+    drop_na(site_id) %>%
+    drop_na(sample_collect_date) %>%
+    drop_na(population_served) %>%
+    
+    # --------------------------------------------------------
+  # Create unique IDs for grouping
+  #
+  # These define a "data series" for WVAL calculations
+  # --------------------------------------------------------
+  mutate(
+    site_id_with_pcr            = paste(site_id, pcr_target, sep = "_"),
+    site_id_with_pcr_source     = paste(site_id, pcr_target, source, sep = "_"),
+    site_id_with_pcr_source_mlm = paste(site_id_with_pcr, source, major_lab_method, sep = "_")
+  ) %>%
+    
+    # OPTIONAL: some jurisdictions group here
+    # TODO_OPTIONAL_LOCAL_RULE
+    
+    # Calculate time since first sample
+    mutate(
+      days_since_first_sample = as.integer(
+        difftime(sample_collect_date, min(sample_collect_date), units = "days")
+      ),
+      first_collection_date = min(sample_collect_date)
+    ) %>%
+    ungroup()
+  
+  
+  # =========================================================
+  # STEP 3: REMOVE OUTLIERS
+  # =========================================================
+  # Goal:
+  # Remove extreme values that could distort baseline
+  #
+  # HOW:
+  # Uses z-score > 4 threshold within each series
+  # =========================================================
+  
+  all_final2 <- remove_outliers(data = all_final1)
+  
+  
+  # =========================================================
+  # STEP 4: ALIGN DATA TO BASELINE RECALCULATION DATES
+  # =========================================================
+  # Goal:
+  # Calculate how far each sample is from the nearest
+  # baseline recalculation date
+  #
+  # WHY:
+  # CDC recalculates baselines on fixed dates:
+  #   SARS: April 1 and October 1
+  #   Flu/RSV: August 1
+  # =========================================================
+  
+  if (target == "sars-cov-2") {
+    
+    all_final3 <- all_final2 %>%
+      
+      # Fill in missing dates so time calculations work
+      arrange(sample_collect_date, .by_group = TRUE) %>%
+      complete(
+        sample_collect_date = seq.Date(
+          min(sample_collect_date, na.rm = TRUE),
+          max(sample_collect_date, na.rm = TRUE),
+          by = "day"
+        )
+      ) %>%
+      
+      mutate(
+        # Split year into two halves:
+        # Apr–Sep vs Oct–Mar
+        half_year = if_else(month(sample_collect_date) >= 4 & month(sample_collect_date) <= 9, 1, 2),
+        
+        year = year(sample_collect_date),
+        
+        # Calculate distance to nearest April 1 or October 1
+        days_to_nearest_target = sapply(sample_collect_date, calc_days_to_target_sars)
+      ) %>%
+      
+      # Find closest samples to recalculation dates
+      group_by(site_id_with_pcr_source_mlm, half_year, year) %>%
+      mutate(min_days_to_target = min(days_to_nearest_target, na.rm = TRUE)) %>%
+      ungroup() %>%
+      select(-half_year)
+    
+  } else {
+    
+    all_final3 <- all_final2 %>%
+      arrange(sample_collect_date, .by_group = TRUE) %>%
+      complete(
+        sample_collect_date = seq.Date(
+          min(sample_collect_date, na.rm = TRUE),
+          max(sample_collect_date, na.rm = TRUE),
+          by = "day"
+        )
+      ) %>%
+      
+      mutate(
+        year_val = year(sample_collect_date),
+        
+        # Distance to August 1
+        days_to_nearest_target = sapply(sample_collect_date, calc_days_to_target_flu_rsv)
+      ) %>%
+      
+      group_by(site_id_with_pcr_source_mlm, year_val) %>%
+      mutate(min_days_to_target = min(days_to_nearest_target, na.rm = TRUE)) %>%
+      ungroup()
+      } 
+
+    # ============================================================
+    # STEP 5: CALCULATE BASELINE + STANDARD DEVIATION
+    # ============================================================
+    # Goal:
+    # - For each site/pathogen/source/method series, calculate the
+    #   reference baseline and standard deviation used for WVAL
+    #
+    # WHY:
+    # WVAL compares each sample to a site-specific "normal low level"
+    # using:
+    #   baseline = 10th percentile of recent log concentrations
+    #   std dev  = spread of recent log concentrations
+    #
+    # RULES:
+    # - SARS-CoV-2:
+    #     use first 6 months OR recalculation points nearest Apr 1 / Oct 1
+    # - Flu A / RSV:
+    #     use first 12 months OR recalculation points nearest Aug 1
+    #
+    # The rolling window here is 730 days = 24 months
+    # ============================================================
+    
+    if(target == "sars-cov-2") {
+      all_final4 <- all_final3 %>%
+        group_by(site_id_with_pcr_source_mlm) %>%
+        mutate(
+          # baseline_flag marks rows where baseline should be recalculated:
+          # - during the first 6 months of data, OR
+          # - at the sample(s) closest to the Apr/Oct recalculation date
+          baseline_flag = (days_since_first_sample <= 182) |
+            (days_to_nearest_target == min_days_to_target),
+          
+          # temp_baseline:
+          # compute the rolling 10th percentile of ln concentration
+          # over the prior 24 months, but only on rows where baseline_flag is TRUE
+          temp_baseline = if_else(
+            baseline_flag,
+            slide_index_dbl(
+              pcr_target_avg_conc_ln,
+              sample_collect_date,
+              .before = 730, .after = 0, .complete = FALSE,
+              .f = ~ quantile_approx(.x, 0.10)
+            ),
+            NA_real_
+          ),
+          
+          # Carry the most recent baseline forward until the next recalculation
+          baseline_avg_conc_ln = na.locf(temp_baseline, na.rm = FALSE),
+          
+          # temp_std:
+          # rolling standard deviation over the same 24-month window
+          temp_std = if_else(
+            baseline_flag,
+            slide_index_dbl(
+              pcr_target_avg_conc_ln,
+              sample_collect_date,
+              .before = 730, .after = 0, .complete = FALSE,
+              .f = ~ sd(.x, na.rm = TRUE)
+            ),
+            NA_real_
+          ),
+          
+          # Carry the most recent std dev forward too
+          std_avg_conc_ln = na.locf(temp_std, na.rm = FALSE)
+        ) %>%
+        select(-c(temp_std, temp_baseline, baseline_flag)) %>%
+        drop_na(pcr_target) %>%
+        ungroup()
+      
+    } else {
+      
+      all_final4 <- all_final3 %>%
+        group_by(site_id_with_pcr_source_mlm) %>%
+        mutate(
+          # For Flu/RSV, baseline recalculates:
+          # - during the first 12 months, OR
+          # - at the sample(s) closest to Aug 1
+          # Also limited here to months Aug-Dec for the annual reset logic
+          baseline_flag = (days_since_first_sample <= 365) |
+            (days_to_nearest_target == min_days_to_target) &
+            (month(sample_collect_date) %in% 8:12),
+          
+          temp_baseline = if_else(
+            baseline_flag,
+            slide_index_dbl(
+              pcr_target_avg_conc_ln,
+              sample_collect_date,
+              .before = 730, .after = 0, .complete = FALSE,
+              .f = ~ quantile_approx(.x, 0.10)
+            ),
+            NA_real_
+          ),
+          
+          # Carry the last calculated baseline forward
+          baseline_avg_conc_ln = na.locf(temp_baseline, na.rm = FALSE),
+          
+          temp_std = if_else(
+            baseline_flag,
+            slide_index_dbl(
+              pcr_target_avg_conc_ln,
+              sample_collect_date,
+              .before = 730, .after = 0, .complete = FALSE,
+              .f = ~ sd(.x, na.rm = TRUE)
+            ),
+            NA_real_
+          ),
+          
+          # Carry the last calculated std dev forward
+          std_avg_conc_ln = na.locf(temp_std, na.rm = FALSE)
+        ) %>%
+        select(-temp_baseline, -temp_std, -baseline_flag) %>%
+        drop_na(pcr_target) %>%
+        ungroup()
+    }
+    
+    
+    # ============================================================
+    # STEP 6: SAVE THE LAST VALID BASELINE + STANDARD DEVIATION
+    # ============================================================
+    # Goal:
+    # For each site/pathogen/source/method series, keep the most recent
+    # non-missing baseline and std dev values.
+    #
+    # WHY:
+    # Those "last" values are what each sample will be compared against
+    # to calculate its WVAL score.
+    # ============================================================
+    
+    last_vals <- all_final4 %>%
+      filter(!is.na(std_avg_conc_ln) & !is.na(baseline_avg_conc_ln)) %>%
+      group_by(site_id_with_pcr_source_mlm) %>%
+      slice_tail(n = 1) %>%
+      summarise(
+        last_baseline_ln = baseline_avg_conc_ln,
+        last_std_ln = std_avg_conc_ln
+      )
+    
+    
+    # ============================================================
+    # STEP 7: CALCULATE WASTEWATER INDEX (WVAL SCORE)
+    # ============================================================
+    # Goal:
+    # Convert each sample’s concentration into a standardized score
+    # relative to its site's baseline.
+    #
+    # FORMULA:
+    #   ww_index_ln = (sample_ln - baseline_ln) / std_ln
+    #   ww_index_ln_lin = exp(ww_index_ln)
+    #
+    # WHY:
+    # - The first formula says how many standard deviations above/below
+    #   baseline the sample is
+    # - exp() converts that back to a positive linear scale used for WVAL
+    #
+    # Sites with less than 56 days of data are excluded here
+    # ============================================================
+    
+    result <- all_final4 %>%
+      left_join(last_vals, by = "site_id_with_pcr_source_mlm") %>%
+      group_by(site_id_with_pcr_source_mlm) %>%
+      mutate(
+        # Number of days this site/method/pathogen series has existed
+        days_site_online = max(days_since_first_sample, na.rm = TRUE)
+      ) %>%
+      ungroup() %>%
+      mutate(
+        # Do not calculate WVAL until there are at least 56 days of data
+        ww_index_ln = case_when(
+          days_site_online < 56 ~ NA_real_,
+          TRUE ~ (pcr_target_avg_conc_ln - last_baseline_ln) / last_std_ln
+        ),
+        
+        # Convert back to linear scale
+        ww_index_ln_lin = exp(ww_index_ln),
+        
+        # Create week-ending date for weekly aggregation
+        day_of_week = wday(sample_collect_date),
+        week_end = sample_collect_date + days(7 - day_of_week)
+      ) %>%
+      group_by(site_id_with_pcr_source_mlm, week_end) %>%
+      arrange(sample_collect_date, .by_group = TRUE) %>%
+      ungroup() %>%
+      distinct()
+    
+    # Save an intermediate copy for troubleshooting if needed
+    intermediate_result <<- result
+    
+    
+    # ============================================================
+    # STEP 8: HANDLE OVERLAPPING MAJOR LAB METHODS (MLMs)
+    # ============================================================
+    # Goal:
+    # If the same site has overlapping method eras in the same week,
+    # keep the most recent one.
+    #
+    # WHY:
+    # Avoid double-counting a site in weeks where old and new lab-method
+    # series overlap.
+    # ============================================================
+    
+    result <- result %>%
+      group_by(site_id_with_pcr_source_mlm) %>%
+      mutate(
+        # Earliest date this MLM series appears
+        min_sample_date_for_mlm = min(sample_collect_date, na.rm = TRUE)
+      ) %>%
+      ungroup() %>%
+      
+      # Within each site/week, rank the series so the most recent MLM comes first
+      group_by(site_id_with_pcr, week_end) %>%
+      arrange(desc(min_sample_date_for_mlm), desc(major_lab_method)) %>%
+      mutate(
+        latest_min_date_rank = rank(
+          -as.numeric(min_sample_date_for_mlm),
+          ties.method = "min"
+        )
+      ) %>%
+      ungroup() %>%
+      
+      # Keep only the newest non-missing WVAL series for that site/week
+      filter(latest_min_date_rank == 1, !is.na(ww_index_ln_lin))
+    
+    
+    # ============================================================
+    # STEP 9: ASSIGN WVAL CATEGORY TO EACH RESULT
+    # ============================================================
+    # Goal:
+    # Turn the numeric WVAL score into:
+    #   Very Low / Low / Moderate / High / Very High
+    # based on pathogen-specific cutoffs
+    # ============================================================
+    
+    unaggregated_result <- result %>%
+      mutate(wval_result = categorize_wval(ww_index_ln_lin, pcr_target)) %>%
+      distinct()
+    
+    # Save unaggregated copy for troubleshooting if needed
+    unaggregated_result <<- unaggregated_result
+    
+    
+    # ============================================================
+    # STEP 10: CALCULATE SITE-WEEKLY AVERAGE WVAL
+    # ============================================================
+    # Goal:
+    # Collapse multiple samples within the same site/week into a single
+    # weekly WVAL value for that site.
+    #
+    # HOW:
+    # - average the weekly WVAL values within each site/week
+    # - keep selected metadata fields
+    # - assign the weekly category label
+    # ============================================================
+    
+    site_weekly_average <- function(data) {
+      site_ag <- data %>%
+        filter(!is.na(ww_index_ln_lin)) %>%
+        arrange(desc(sample_collect_date)) %>%
+        group_by(site_id_with_pcr, week_end) %>%
+        
+        reframe(
+          site_id = first(site_id),
+          mean_pcr_target_avg_conc_lin = mean(pcr_target_avg_conc_lin, na.rm = TRUE),
+          all_pcr_target_avg_conc_lin = paste(pcr_target_avg_conc_lin, collapse = ", "),
+          wval_site_wk = mean(ww_index_ln_lin, na.rm = TRUE),
+          all_sample_collect_dates = paste(sample_collect_date, collapse = ", "),
+          days_since_first_sample = last(days_since_first_sample),
+          baseline_avg_conc_ln = last(baseline_avg_conc_ln),
+          last_baseline_ln = last(last_baseline_ln),
+          last_std_ln = last(last_std_ln),
+          std_avg_conc_ln = last(std_avg_conc_ln),
+          pcr_target_below_lod = first(pcr_target_below_lod),
+          pcr_target = first(pcr_target),
+          all_ww_index_ln_lin = paste(ww_index_ln_lin, collapse = ", "),
+          # all_sample_ids = paste(sample_id, collapse = ", "),
+          source = source,
+          county_names = county_names
+        ) %>%
+        
+        # Convert numeric weekly WVAL into category label
+        mutate(
+          wval_site_wk_level = categorize_wval(wval_site_wk, pcr_target)
+        ) %>%
+        distinct()
+      
+      return(site_ag)
+    }
+    
+    
+    # ============================================================
+    # STEP 11: RETURN SITE-WEEK RESULTS
+    # ============================================================
+    # This is the final output of wval_v2():
+    # one row per site per week with numeric WVAL + category
+    # ============================================================
+    
+    site_ag <- site_weekly_average(unaggregated_result)
+    
+    return(site_ag)
+    
+  }
+  
+  
+  # ============================================================
+  # Step: 12 COUNTY-LEVEL AGGREGATION FUNCTION
+  # ============================================================
+  # Goal:
+  # Aggregate site-week WVAL values up to the county level.
+  #
+  # HOW:
+  # - take the median site-week WVAL within each county/week/pathogen
+  # - assign a category using the same cutoff function
+  # ============================================================
+  
+  wval_county_wk_agg <- function(data) {
+    
+    county_ag <- data %>%
+      group_by(county_names, week_end, pcr_target) %>%
+      reframe(
+        week_end = first(week_end),
+        wval_county_wk = median(wval_site_wk)
+      ) %>%
+      unique() %>%
+      arrange(county_names, week_end) %>%
+      ungroup()
+    
+    county_ag <- county_ag %>%
+      mutate(
+        wval_county_wk_level = categorize_wval(wval_county_wk, pcr_target)
+      )
+    
+    return(county_ag)
+  }
+
+# ============================================================
+# STEP 13: CHECK REQUIRED COLUMNS (RUN THIS FIRST)
+# ============================================================
+# Goal:
+# Make sure your Hawaii dataset has all required columns
+# BEFORE running any processing.
+#
+# SEARCH KEYWORD: TODO_HAWAII_DATA
+# ============================================================
+
+required_columns <- c(
+  "wwtp_jurisdiction",
+  "source",
+  "lab_id",
+  "site_id",
+  "wwtp_name",
+  "population_served",
+  "sample_id",
+  "sample_collect_date",
+  "pcr_target",
+  # "pcr_gene_target",
+  "pcr_target_avg_conc",
+  "pcr_target_flowpop_lin",
+  "lod_sewage",
+  "county_names",
+  "concentration_method",
+  "extraction_method",
+  "major_lab_method",
+  "sample_location",
+  "sample_location_specify",
+  "sample_matrix"
+)
+
+# Run this after loading hawaii_dataset:
+# missing_columns <- setdiff(required_columns, names(hawaii_dataset))
+# print(missing_columns)
+
+# If anything prints, you are missing required fields.
+
+
+# ============================================================
+# STEP 14: IDENTIFY WHERE TO EDIT THE SCRIPT
+# ============================================================
+# Goal:
+# Show your team the main places in the script they may need to update
+# for Hawaii-specific data and logic.
+#
+# SEARCH FOR:
+# - TODO_HAWAII_DATA
+#     -> load your data + rename columns
+# - TODO_OPTIONAL_LOCAL_RULE
+#     -> optional filtering or grouping rules
+# - TODO_CHECK_IF_APPLIES
+#     -> SARS-specific logic that may or may not apply
+# ============================================================
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# ============================================================
+# STEP 15: RUN WVAL FUNCTIONS
+# ============================================================
+# Goal:
+# Run the main WVAL function for each pathogen and then create
+# county-level results from the site-level outputs.
+#
+# Output:
+# - site_ag_*   = site-week WVAL results
+# - county_ag_* = county-week WVAL results
+#
+# NOTE:
+# Only run this AFTER:
+# - data loads successfully
+# - column check passes
+# - prep steps run without error
+# ============================================================
+
+#######################################
+## Call site and county WVAL functions
+#######################################
+
+site_ag_sars <- wval_v2(data, target = "sars-cov-2")
+site_ag_flu  <- wval_v2(data, target = "fluav")
+site_ag_rsv  <- wval_v2(data, target = "rsv")
+
+county_ag_sars <- wval_county_wk_agg(data = site_ag_sars)
+county_ag_flu  <- wval_county_wk_agg(data = site_ag_flu)
+# Add this if you also want county-level RSV output:
+# county_ag_rsv <- wval_county_wk_agg(data = site_ag_rsv)
+
+
+# ============================================================
+# STEP 16: CREATE STATE-LEVEL WVAL
+# ============================================================
+# Goal:
+# Aggregate site-level weekly WVAL values up to the state level.
+#
+# HOW:
+# - Take the median site-week WVAL across all sites in a week
+# - Assign a WVAL category using the same pathogen-specific cutoffs
+#
+# Output:
+# - One row per week with:
+#     state_wval  = numeric state-level WVAL
+#     state_level = categorical level
+# ============================================================
+
+#######################################
+## Create State WVAL
+#######################################
+
+state_wval_sarscov2 <- site_ag_sars %>%
+  group_by(week_end) %>%
+  mutate(state_wval = median(wval_site_wk, na.rm = TRUE)) %>%
+  mutate(state_level = categorize_wval(state_wval, pcr_target)) %>%
+  distinct(week_end, state_wval, state_level)
+
+state_wval_flu <- site_ag_flu %>%
+  group_by(week_end) %>%
+  mutate(state_wval = median(wval_site_wk, na.rm = TRUE)) %>%
+  mutate(state_level = categorize_wval(state_wval, pcr_target)) %>%
+  distinct(week_end, state_wval, state_level)
+
+state_wval_rsv <- site_ag_rsv %>%
+  group_by(week_end) %>%
+  mutate(state_wval = median(wval_site_wk, na.rm = TRUE)) %>%
+  mutate(state_level = categorize_wval(state_wval, pcr_target)) %>%
+  distinct(week_end, state_wval, state_level)
+
+
+# ============================================================
+# STEP 17: DEFINE CDC COMPARISON / CONCORDANCE FUNCTION
+# ============================================================
+# Goal:
+# Compare Hawaii's state-level WVAL categories to CDC NWSS categories
+# and summarize how often they agree.
+#
+# Output:
+# - total number of observations compared
+# - number and percent concordant
+# - number and percent discordant
+# - contingency table of category matches/mismatches
+# - discordance distance (how far apart mismatched categories are)
+#
+# IMPORTANT:
+# Inputs must already be aligned so that the two vectors represent
+# the same weeks in the same order.
+# ============================================================
+
+compare_wval_function <- function(state_wval, nwss_wval, print_matches = TRUE) {
+  
+  # ----------------------------------------------------------
+  # Convert WVAL values into ordered categories
+  # ----------------------------------------------------------
+  # This ensures the levels have a meaningful order:
+  # Very Low < Low < Moderate < High < Very High
+  # ----------------------------------------------------------
+  state_wval <- factor(
+    state_wval,
+    levels = c("Very Low", "Low", "Moderate", "High", "Very High"),
+    ordered = TRUE
+  )
+  
+  nwss_wval <- factor(
+    nwss_wval,
+    levels = c("Very Low", "Low", "Moderate", "High", "Very High"),
+    ordered = TRUE
+  )
+  
+  # ----------------------------------------------------------
+  # Check that both inputs have the same length
+  # ----------------------------------------------------------
+  if (length(state_wval) != length(nwss_wval)) {
+    stop("Variables must have the same length")
+  }
+  
+  # ----------------------------------------------------------
+  # Create row-by-row comparison table
+  # ----------------------------------------------------------
+  comparison_df <- data.frame(
+    state_wval = state_wval,
+    nwss_wval = nwss_wval,
+    Match = state_wval == nwss_wval
+  )
+  
+  # ----------------------------------------------------------
+  # Calculate summary statistics
+  # ----------------------------------------------------------
+  total_obs <- nrow(comparison_df)
+  matching_obs <- sum(comparison_df$Match)
+  non_matching_obs <- total_obs - matching_obs
+  match_percentage <- (matching_obs / total_obs) * 100
+  discordance_percentage <- (non_matching_obs / total_obs) * 100
+  
+  # ----------------------------------------------------------
+  # Identify where discordance happens
+  # ----------------------------------------------------------
+  discordance_levels <- table(
+    state_wval[!comparison_df$Match],
+    nwss_wval[!comparison_df$Match]
+  )
+  
+  # ----------------------------------------------------------
+  # Print high-level summary
+  # ----------------------------------------------------------
+  cat("Concordance Analysis:\n")
+  cat("Total observations:", total_obs, "\n")
+  cat("Concordant observations:", matching_obs, "\n")
+  cat("Discordant observations:", non_matching_obs, "\n")
+  cat("Concordance percentage:", round(match_percentage, 2), "%\n")
+  cat("Discordance percentage:", round(discordance_percentage, 2), "%\n\n")
+  
+  # ----------------------------------------------------------
+  # Print full contingency table
+  # ----------------------------------------------------------
+  cont_table <- table(state_wval, nwss_wval)
+  cat("Contingency Table (Counts):\n")
+  print(cont_table)
+  
+  # ----------------------------------------------------------
+  # If mismatches exist, describe them in more detail
+  # ----------------------------------------------------------
+  if (non_matching_obs > 0) {
+    cat("\nDiscordance Details:\n")
+    cat("Observations where categorizations differ:\n")
+    print(discordance_levels)
+    
+    cat("\nDetailed Discordance Analysis:\n")
+    
+    # Distance = how many category levels apart the mismatch is
+    discordance_distance <- sapply(which(!comparison_df$Match), function(i) {
+      abs(as.numeric(state_wval[i]) - as.numeric(nwss_wval[i]))
+    })
+    
+    cat("Discordance Category Distance Distribution:\n")
+    print(table(discordance_distance))
+  }
+  
+  # Return the comparison table invisibly
+  invisible(comparison_df)
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# ============================================================
+# EXPORT RESULTS TO CSV FILES
+# ============================================================
+# Goal:
+# Save site, county, and state WVAL outputs as CSV files
+#
+# Files will be saved to your current working directory
+# (use getwd() to check where that is)
+# ============================================================
+
+
+# -----------------------------
+# SITE-LEVEL OUTPUTS
+# -----------------------------
+write.csv(site_ag_sars, "site_wval_sars.csv", row.names = FALSE)
+write.csv(site_ag_flu,  "site_wval_flu.csv",  row.names = FALSE)
+write.csv(site_ag_rsv,  "site_wval_rsv.csv",  row.names = FALSE)
+
+
+# -----------------------------
+# COUNTY-LEVEL OUTPUTS
+# -----------------------------
+write.csv(county_ag_sars, "county_wval_sars.csv", row.names = FALSE)
+write.csv(county_ag_flu,  "county_wval_flu.csv",  row.names = FALSE)
+# Optional:
+# write.csv(county_ag_rsv, "county_wval_rsv.csv", row.names = FALSE)
+
+
+# -----------------------------
+# STATE-LEVEL OUTPUTS
+# -----------------------------
+write.csv(state_wval_sarscov2, "state_wval_sars.csv", row.names = FALSE)
+write.csv(state_wval_flu,      "state_wval_flu.csv",  row.names = FALSE)
+write.csv(state_wval_rsv,      "state_wval_rsv.csv",  row.names = FALSE)
+
+
+# -----------------------------
+# OPTIONAL: INTERMEDIATE OUTPUTS
+# -----------------------------
+# These are useful for debugging or deeper analysis
+
+# write.csv(unaggregated_result, "sample_level_wval.csv", row.names = FALSE)
+# write.csv(intermediate_result, "intermediate_wval.csv", row.names = FALSE)
+
+```
+

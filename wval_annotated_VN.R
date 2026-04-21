@@ -45,8 +45,8 @@ p_load(
 # ============================================================
 
 # TODO_HAWAII_DATA: ENTER YOUR DATA HERE
-# Example:
-# hawaii_dataset <- read_csv("path/to/your_jurisdiction_file.csv")
+# Example: this will need to be changed for each person, i didn't realize it would be complicated to get a file from share point
+ hawaii_dataset <- read_csv("C:/Users/jessica.freely/OneDrive - State of Hawaii/Documents/contour-export-NWSS-Analyzed-CDC-Commercial-Export.csv")
 
 # Example placeholder only:
 # hawaii_dataset <- read_csv("file_path.csv")
@@ -137,6 +137,7 @@ data <- hawaii_dataset %>%
     extraction_method,
     major_lab_method,
     key_plot_with_pcr_by_day
+    pcr_target_flowpop_lin #normalize by flow rate and population
   ) %>%
 
   # Drop rows missing concentration.
@@ -144,7 +145,7 @@ data <- hawaii_dataset %>%
 
 
 # ============================================================
-# 3) SARS-CoV-2 SPECIAL HANDLING
+# 3) SARS-CoV-2 SPECIAL HANDLING **we dont need step 3 we have just one gene target (n) for sars-cov-2
 # ============================================================
 # What this section does:
 # A) If multiple SARS gene targets exist for the same site/day,
@@ -174,36 +175,34 @@ data <- hawaii_dataset %>%
 # SEARCH KEYWORD: TODO_CHECK_IF_APPLIES
 # ------------------------------------------------------------
 
-prioritize_sars_targets <- function(data) {
+# prioritize_sars_targets <- function(data) {
 
-  dt <- data.table(data)
+ # dt <- data.table(data)
 
-  non_sarscov2_dt <- dt[pcr_target != "sars-cov-2", ]
-  sarscov2_dt     <- dt[pcr_target == "sars-cov-2", ]
+ # non_sarscov2_dt <- dt[pcr_target != "sars-cov-2", ]
+ # sarscov2_dt     <- dt[pcr_target == "sars-cov-2", ]
 
   # Assign a numeric rank to each SARS target.
-  sarscov2_dt[, gene_rank := fcase(
-    pcr_gene_target == "n", 1,
-    grepl("n1|n2|n3|n1 and n2 combined|ddcov_n", pcr_gene_target, ignore.case = TRUE), 1,
-    grepl("orf1", pcr_gene_target, ignore.case = TRUE), 2,
-    grepl("e_sarbeco|ddcov_e", pcr_gene_target, ignore.case = TRUE), 3,
-    grepl("rdrp", pcr_gene_target, ignore.case = TRUE), 4,
-    pcr_gene_target == "s", 5,
-    grepl("taqpath s", pcr_gene_target, ignore.case = TRUE), 6,
-    default = 99
-  )]
+ # sarscov2_dt[, gene_rank := fcase(
+   #pcr_gene_target == "n", 1,
+  #grepl("n1|n2|n3|n1 and n2 combined|ddcov_n", pcr_gene_target, ignore.case = TRUE), 1,
+  #grepl("orf1", pcr_gene_target, ignore.case = TRUE), 2,
+   #grepl("e_sarbeco|ddcov_e", pcr_gene_target, ignore.case = TRUE), 3,
+    #grepl("rdrp", pcr_gene_target, ignore.case = TRUE), 4,
+    #pcr_gene_target == "s", 5,
+    #grepl("taqpath s", pcr_gene_target, ignore.case = TRUE), 6,
+    #default = 99
+  #)]
 
   # For each site/day key, keep the lowest (best) rank.
-  sarscov2_dt <- sarscov2_dt[
-    , .SD[gene_rank == min(gene_rank, na.rm = TRUE)],
-    by = .(key_plot_with_pcr_by_day)
-  ]
+  #sarscov2_dt <- sarscov2_dt[
+   # , .SD[gene_rank == min(gene_rank, na.rm = TRUE)],
+    #by = .(key_plot_with_pcr_by_day)]
 
-  sarscov2_dt[, gene_rank := NULL]
+  #sarscov2_dt[, gene_rank := NULL]
 
-  data <- as.data.frame(rbind(non_sarscov2_dt, sarscov2_dt))
-  return(data)
-}
+  #data <- as.data.frame(rbind(non_sarscov2_dt, sarscov2_dt))
+  #return(data)}
 
 
 # ------------------------------------------------------------
@@ -217,44 +216,43 @@ prioritize_sars_targets <- function(data) {
 # SEARCH KEYWORD: TODO_CHECK_IF_APPLIES
 # ------------------------------------------------------------
 
-calc_n1n2_avg <- function(data) {
+#calc_n1n2_avg <- function(data) {
 
-  samples_with_both <- data %>%
-    filter(
-      pcr_target == "sars-cov-2",
-      pcr_gene_target %in% c("n1", "n2")
-    ) %>%
-    group_by(sample_id) %>%
-    summarise(n_gene_targets = n_distinct(pcr_gene_target), .groups = "drop") %>%
-    filter(n_gene_targets == 2) %>%
-    pull(sample_id)
+  #samples_with_both <- data %>%
+    #filter(
+      #pcr_target == "sars-cov-2",
+      #pcr_gene_target %in% c("n1", "n2")
+    #) %>%
+    #group_by(sample_id) %>%
+    #summarise(n_gene_targets = n_distinct(pcr_gene_target), .groups = "drop") %>%
+    #filter(n_gene_targets == 2) %>%
+    #pull(sample_id)
 
-  sars_averaged <- data %>%
-    filter(sample_id %in% samples_with_both) %>%
-    group_by(sample_id) %>%
-    reframe(
-      avg_lod = mean(lod_sewage, na.rm = TRUE),
-      n_above_lod = sum(pcr_target_avg_conc >= lod_sewage, na.rm = TRUE),
-      pcr_target_avg_conc = if_else(
-        n_above_lod > 0,
-        10^(mean(log10(pcr_target_avg_conc), na.rm = TRUE)),
-        avg_lod / 2
-      ),
-      lod_sewage = avg_lod,
-      pcr_gene_target_agg = "n2 and n1"
-    ) %>%
-    ungroup() %>%
-    distinct(sample_id, .keep_all = TRUE) %>%
-    select(-avg_lod, -n_above_lod)
+  #sars_averaged <- data %>%
+    #filter(sample_id %in% samples_with_both) %>%
+    #group_by(sample_id) %>%
+    #reframe(
+      #avg_lod = mean(lod_sewage, na.rm = TRUE),
+      #n_above_lod = sum(pcr_target_avg_conc >= lod_sewage, na.rm = TRUE),
+      #pcr_target_avg_conc = if_else(
+        #n_above_lod > 0,
+        #10^(mean(log10(pcr_target_avg_conc), na.rm = TRUE)),
+        #avg_lod / 2
+      #),
+      #lod_sewage = avg_lod,
+      #pcr_gene_target_agg = "n2 and n1"
+    #) %>%
+    #ungroup() %>%
+    #distinct(sample_id, .keep_all = TRUE) %>%
+    #select(-avg_lod, -n_above_lod)
 
-  sars_individual <- data %>%
-    filter(!sample_id %in% samples_with_both) %>%
-    mutate(pcr_gene_target_agg = pcr_gene_target)
+  #sars_individual <- data %>%
+    #filter(!sample_id %in% samples_with_both) %>%
+    #mutate(pcr_gene_target_agg = pcr_gene_target)
 
-  final_result <- bind_rows(sars_averaged, sars_individual)
+  #final_result <- bind_rows(sars_averaged, sars_individual)
 
-  return(final_result)
-}
+  #return(final_result)}
 
 
 # ------------------------------------------------------------
@@ -267,9 +265,9 @@ calc_n1n2_avg <- function(data) {
 #   you may not need calc_n1n2_avg().
 # ------------------------------------------------------------
 
-data <- data %>%
-  prioritize_sars_targets() %>%
-  calc_n1n2_avg()
+#data <- data %>%
+ # prioritize_sars_targets() %>%
+  #calc_n1n2_avg()
 
 
 # ============================================================
