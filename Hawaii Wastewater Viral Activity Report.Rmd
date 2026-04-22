@@ -1359,7 +1359,12 @@ write.csv(site_ag_rsv,  "site_wval_rsv.csv",  row.names = FALSE)
 # -----------------------------
 write.csv(county_ag_sars, "county_wval_sars.csv", row.names = FALSE)
 write.csv(county_ag_flu,  "county_wval_flu.csv",  row.names = FALSE)
+<<<<<<< HEAD
 Write.csv(county_ag_rsv, "county_wval_rsv.csv", row.names = FALSE)
+=======
+# Optional:
+# write.csv(county_ag_rsv, "county_wval_rsv.csv", row.names = FALSE)
+>>>>>>> 2175b0b4bf633159af63d43a96e7bb834848b61a
 
 
 # -----------------------------

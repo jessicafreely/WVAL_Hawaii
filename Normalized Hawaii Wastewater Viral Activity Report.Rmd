@@ -57,7 +57,7 @@ p_load(
 
 # TODO_HAWAII_DATA: ENTER YOUR DATA HERE
 # Example: this will need to be changed for each person, i didn't realize it would be complicated to get a file from share point
- hawaii_dataset <- read_csv("C:/Users/jessica.freely/OneDrive - State of Hawaii/Desktop/WW Epi/DSTT Cohort 6/GitHub/WVAL_Hawaii_GitHub/contour-export-NWSS-Analyzed-CDC-Commercial-Export.csv")
+hawaii_dataset <- read_csv("C:/Users/jessica.freely/OneDrive - State of Hawaii/Desktop/WW Epi/DSTT Cohort 6/GitHub/WVAL_Hawaii_GitHub/contour-export-NWSS-Analyzed-CDC-Commercial-Export.csv")
 
 # Example placeholder only:
 # hawaii_dataset <- read_csv("file_path.csv")
@@ -423,8 +423,8 @@ remove_outliers <- function(data) {
   mean_std_ln <- data %>%
     group_by(site_id_with_pcr_source_mlm) %>%
     summarise(
-      mean_avg_conc_ln = mean(pcr_target_flowpop_lin_ln, na.rm = TRUE),
-      stddev_avg_conc_ln = sd(pcr_target_flowpop_lin_ln, na.rm = TRUE)) 
+      mean_avg_conc_ln = mean(pcr_target_flowpop_ln, na.rm = TRUE),
+      stddev_avg_conc_ln = sd(pcr_target_flowpop_ln, na.rm = TRUE)) 
   
   clean_df <- left_join(data, mean_std_ln, by = "site_id_with_pcr_source_mlm")
   
@@ -434,7 +434,7 @@ remove_outliers <- function(data) {
   # calculate and filter the Z-score, handling NA stddev and division by zero
   clean_df <- clean_df %>%
     mutate(z_score = ifelse((is.na(stddev_avg_conc_ln) | stddev_avg_conc_ln == 0), 0, # assign a z-score to ensure rows won't be removed
-                            abs(pcr_target_flowpop_lin_ln - mean_avg_conc_ln) / stddev_avg_conc_ln))
+                            abs(pcr_target_flowpop_ln - mean_avg_conc_ln) / stddev_avg_conc_ln))
   
   # store outliers
   outliers <- clean_df %>%
@@ -536,7 +536,7 @@ wval_v2 <- function(data, target) {
     filter(pcr_target == target & population_served >= 3000) %>%
     mutate(
       # Mark if value is below detection limit
-      pcr_target_below_lod = if_else(pcr_target_avg_conc < lod_sewage, "yes", "no"), #question for Dr. Turner LOD with normalized concentration
+      pcr_target_below_lod = if_else(pcr_target_avg_conc < lod_sewage, "yes", "no"), 
       
       # Mark if detected
       pcr_target_detect    = if_else(pcr_target_avg_conc < lod_sewage, "no", "yes"),
@@ -555,8 +555,9 @@ wval_v2 <- function(data, target) {
         log10(pcr_target_avg_conc_lin)
       ),
       
+    
       # Natural log version (used for WVAL math)
-      pcr_target_avg_conc_ln = log(pcr_target_avg_conc_lin),
+      pcr_target_flowpop_ln = log(pcr_target_flowpop_lin),
       
       # Extract year from date
       year = year(sample_collect_date)
@@ -762,7 +763,7 @@ wval_v2 <- function(data, target) {
           temp_baseline = if_else(
             baseline_flag,
             slide_index_dbl(
-              pcr_target_avg_conc_ln,
+              pcr_target_flowpop_ln,
               sample_collect_date,
               .before = 730, .after = 0, .complete = FALSE,
               .f = ~ quantile_approx(.x, 0.10)
@@ -778,7 +779,7 @@ wval_v2 <- function(data, target) {
           temp_std = if_else(
             baseline_flag,
             slide_index_dbl(
-              pcr_target_avg_conc_ln,
+              pcr_target_flowpop_ln,
               sample_collect_date,
               .before = 730, .after = 0, .complete = FALSE,
               .f = ~ sd(.x, na.rm = TRUE)
@@ -809,7 +810,7 @@ wval_v2 <- function(data, target) {
           temp_baseline = if_else(
             baseline_flag,
             slide_index_dbl(
-              pcr_target_avg_conc_ln,
+              pcr_target_flowpop_ln,
               sample_collect_date,
               .before = 730, .after = 0, .complete = FALSE,
               .f = ~ quantile_approx(.x, 0.10)
@@ -823,7 +824,7 @@ wval_v2 <- function(data, target) {
           temp_std = if_else(
             baseline_flag,
             slide_index_dbl(
-              pcr_target_avg_conc_ln,
+              pcr_target_flowpop_ln,
               sample_collect_date,
               .before = 730, .after = 0, .complete = FALSE,
               .f = ~ sd(.x, na.rm = TRUE)
@@ -893,7 +894,7 @@ wval_v2 <- function(data, target) {
         # Do not calculate WVAL until there are at least 56 days of data
         ww_index_ln = case_when(
           days_site_online < 56 ~ NA_real_,
-          TRUE ~ (pcr_target_avg_conc_ln - last_baseline_ln) / last_std_ln
+          TRUE ~ (pcr_target_flowpop_ln - last_baseline_ln) / last_std_ln
         ),
         
         # Convert back to linear scale
@@ -985,8 +986,8 @@ wval_v2 <- function(data, target) {
         
         reframe(
           site_id = first(site_id),
-          mean_pcr_target_avg_conc_lin = mean(pcr_target_avg_conc_lin, na.rm = TRUE),
-          all_pcr_target_avg_conc_lin = paste(pcr_target_avg_conc_lin, collapse = ", "),
+          mean_pcr_target_flowpop_lin = mean(pcr_target_flowpop_lin, na.rm = TRUE),
+          all_pcr_target_flowpop_lin = paste(pcr_target_flowpop_lin, collapse = ", "),
           wval_site_wk = mean(ww_index_ln_lin, na.rm = TRUE),
           all_sample_collect_dates = paste(sample_collect_date, collapse = ", "),
           days_since_first_sample = last(days_since_first_sample),
@@ -1157,8 +1158,7 @@ site_ag_rsv  <- wval_v2(data, target = "rsv")
 
 county_ag_sars <- wval_county_wk_agg(data = site_ag_sars)
 county_ag_flu  <- wval_county_wk_agg(data = site_ag_flu)
-# Add this if you also want county-level RSV output:
-# county_ag_rsv <- wval_county_wk_agg(data = site_ag_rsv)
+county_ag_rsv <- wval_county_wk_agg(data = site_ag_rsv)
 
 
 # ============================================================
@@ -1349,26 +1349,25 @@ compare_wval_function <- function(state_wval, nwss_wval, print_matches = TRUE) {
 # -----------------------------
 # SITE-LEVEL OUTPUTS
 # -----------------------------
-write.csv(site_ag_sars, "site_wval_sars.csv", row.names = FALSE)
-write.csv(site_ag_flu,  "site_wval_flu.csv",  row.names = FALSE)
-write.csv(site_ag_rsv,  "site_wval_rsv.csv",  row.names = FALSE)
+write.csv(site_ag_sars, "norm_site_wval_sars.csv", row.names = FALSE)
+write.csv(site_ag_flu,  "norm_site_wval_flu.csv",  row.names = FALSE)
+write.csv(site_ag_rsv,  "norm_site_wval_rsv.csv",  row.names = FALSE)
 
 
 # -----------------------------
 # COUNTY-LEVEL OUTPUTS
 # -----------------------------
-write.csv(county_ag_sars, "county_wval_sars.csv", row.names = FALSE)
-write.csv(county_ag_flu,  "county_wval_flu.csv",  row.names = FALSE)
-# Optional:
-# write.csv(county_ag_rsv, "county_wval_rsv.csv", row.names = FALSE)
+write.csv(county_ag_sars, "norm_county_wval_sars.csv", row.names = FALSE)
+write.csv(county_ag_flu,  "norm_county_wval_flu.csv",  row.names = FALSE)
+write.csv(county_ag_rsv, "norm_county_wval_rsv.csv", row.names = FALSE)
 
 
 # -----------------------------
 # STATE-LEVEL OUTPUTS
 # -----------------------------
-write.csv(state_wval_sarscov2, "state_wval_sars.csv", row.names = FALSE)
-write.csv(state_wval_flu,      "state_wval_flu.csv",  row.names = FALSE)
-write.csv(state_wval_rsv,      "state_wval_rsv.csv",  row.names = FALSE)
+write.csv(state_wval_sarscov2, "norm_state_wval_sars.csv", row.names = FALSE)
+write.csv(state_wval_flu,      "norm_state_wval_flu.csv",  row.names = FALSE)
+write.csv(state_wval_rsv,      "norm_state_wval_rsv.csv",  row.names = FALSE)
 
 
 # -----------------------------
@@ -1376,8 +1375,8 @@ write.csv(state_wval_rsv,      "state_wval_rsv.csv",  row.names = FALSE)
 # -----------------------------
 # These are useful for debugging or deeper analysis
 
-# write.csv(unaggregated_result, "sample_level_wval.csv", row.names = FALSE)
-# write.csv(intermediate_result, "intermediate_wval.csv", row.names = FALSE)
+# write.csv(unaggregated_result, "norm_sample_level_wval.csv", row.names = FALSE)
+# write.csv(intermediate_result, "norm_intermediate_wval.csv", row.names = FALSE)
 
 ```
 
