@@ -75,9 +75,41 @@ hawaii_dataset_clean <- hawaii_dataset %>%
     !is.na(pcr_target_avg_conc) & pcr_target_avg_conc != "",
     !is.na(pcr_target_flowpop_lin) & pcr_target_flowpop_lin != "",
     sample_collect_date <= Sys.Date()
+  ) %>%
+
+# 3. ADD YOUR FORMAL NAMES HERE
+mutate(
+  # Formalizing the site names
+  site_id = case_match(
+    site_id, # <--- Added this to tell R which column to check
+    "15001-003-01-00-00" ~ "Hilo WWTP",
+    "15003-002-01-00-00" ~ "Honouliuli WWTP",
+    "15003-001-01-00-00" ~ "Kailua WWTP",
+    "15001-001-01-00-00" ~ "Kaloko WWTP",
+    "15001-002-01-00-00" ~ "Kealakehe WWTP",
+    "15009-001-01-00-00" ~ "Kihei WW Reclamation",
+    "15009-002-01-00-00" ~ "Lahaina WW Reclamation",
+    "15007-001-01-00-00" ~ "Lihue WWTP",
+    "15007-002-01-00-00" ~ "Poipu Kai WWTP",
+    "15007-003-01-00-00" ~ "Princeville WWTP",
+    "15007-004-01-00-00" ~ "Puhi WWTP",
+    "15003-003-01-00-00" ~ "Sand Island WWTP",
+    "15003-005-01-00-00" ~ "Wahiawa WWTP",
+    "15003-004-01-00-00" ~ "Waianae WWTP",
+    "15009-004-01-00-00" ~ "Wailuku-Kahului WWTP",
+    .default = site_id # Good safety net
+  ),
+  
+  # Converting ZIP/FIPS prefixes to County names
+  county_names = case_match(
+    as.character(county_names),
+    "15001" ~ "Hawaii",
+    "15003" ~ "Honolulu",
+    "15007" ~ "Kauai",
+    "15009" ~ "Maui",
+    .default = as.character(county_names)
   )
-
-
+)
 ```
 
 Trouble shooting for accurate data count
@@ -151,6 +183,7 @@ data <- hawaii_dataset_clean %>%
     key_plot_with_pcr_by_day = paste(
       wwtp_jurisdiction,
       wwtp_name,
+      site_id,
       sample_location,
       sample_location_specify,
       sample_matrix,
@@ -1157,8 +1190,7 @@ site_ag_rsv  <- wval_v2(data, target = "rsv")
 
 county_ag_sars <- wval_county_wk_agg(data = site_ag_sars)
 county_ag_flu  <- wval_county_wk_agg(data = site_ag_flu)
-# Add this if you also want county-level RSV output:
-# county_ag_rsv <- wval_county_wk_agg(data = site_ag_rsv)
+county_ag_rsv <- wval_county_wk_agg(data = site_ag_rsv)
 
 
 # ============================================================
@@ -1359,12 +1391,9 @@ write.csv(site_ag_rsv,  "site_wval_rsv.csv",  row.names = FALSE)
 # -----------------------------
 write.csv(county_ag_sars, "county_wval_sars.csv", row.names = FALSE)
 write.csv(county_ag_flu,  "county_wval_flu.csv",  row.names = FALSE)
-<<<<<<< HEAD
-Write.csv(county_ag_rsv, "county_wval_rsv.csv", row.names = FALSE)
-=======
-# Optional:
-# write.csv(county_ag_rsv, "county_wval_rsv.csv", row.names = FALSE)
->>>>>>> 2175b0b4bf633159af63d43a96e7bb834848b61a
+write.csv(county_ag_rsv, "county_wval_rsv.csv", row.names = FALSE)
+
+
 
 
 # -----------------------------
