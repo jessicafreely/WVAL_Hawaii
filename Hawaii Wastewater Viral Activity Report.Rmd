@@ -1414,3 +1414,89 @@ write.csv(state_wval_rsv,      "state_wval_rsv.csv",  row.names = FALSE)
 
 ```
 
+```{r, fig.height = 12, fig.width = 10}
+# ============================================================
+# STEP 18: Other Pathogens
+# ============================================================
+
+other_pathogens_summary <- hawaii_dataset_clean %>%
+  filter(!pcr_target %in% c("fluav", "rsv", "sars-cov-2")) %>%
+  mutate(
+    pcr_target = case_match(
+      pcr_target,
+      "fluav a h1" ~ "Influenza A H1",
+      "fluav a h3" ~ "Influenza A H3",
+      "fluav a h5" ~ "Influenza A H5",
+      "flubv"      ~ "Influenza B",
+      "hmpxv clade ii" ~ "Clade II Mpox",
+      "hmpxv clade i"  ~ "Clade I Mpox",
+      "mev_wt"     ~ "Measles",
+      "nvo"        ~ "Non-Variola Orthopoxviruses",
+      .default     = pcr_target # Keeps original name if no match found
+    ),
+    day_of_week = wday(sample_collect_date),
+    week_end = sample_collect_date + days(7 - day_of_week),
+    is_detected = if_else(pcr_target_detect == "Yes", 1, 0)
+  ) %>%
+  group_by(week_end, county_names, site_id, pcr_target) %>%
+  summarise(
+    weekly_status = if_else(sum(is_detected, na.rm = TRUE) > 0, "Detected", "Not Detected"),
+    total_samples = n(),
+    detections_found = sum(is_detected, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(week_end, site_id) %>%
+  distinct()
+write_csv(other_pathogens_summary, "Other_Pathogens_Detection_Summary.csv")
+
+# ============================================================
+# VISUALIZATION: BARCODE HEATMAP (WASTEWATERSCAN STYLE)
+# ============================================================
+
+library(ggplot2)
+
+current_date_limit <- max(other_pathogens_summary$week_end, na.rm = TRUE)
+eight_weeks_ago <- current_date_limit - days(56)
+
+pathogen_order <- c(
+  "Measles", 
+  "Clade I Mpox", 
+  "Clade II Mpox", 
+  "Non-Variola Orthopoxviruses",
+  "Influenza B",
+  "Influenza A H5",
+  "Influenza A H3",
+  "Influenza A H1"
+)
+recent_pathogens_data <- other_pathogens_summary %>%
+  filter(week_end >= eight_weeks_ago)
+
+ggplot(other_pathogens_summary, aes(x = week_end, y = site_id, fill = weekly_status)) +
+  geom_tile(color = "white", linewidth = 0.5) + 
+  scale_fill_manual(values = c("Detected" = "#800000", "Not Detected" = "#D3D3D3")) +
+  
+  scale_x_date(limits = c(eight_weeks_ago, current_date_limit), 
+               date_breaks = "1 week", 
+               date_labels = "%b %d") +
+  
+  # THIS IS THE KEY: Creates a separate panel for each pathogen
+  facet_wrap(pcr_target ~ ., scales = "free_y", space = "free_y") +
+  
+  theme_minimal() +
+  labs(
+    title = "Other Pathogens: Detection by Site and Target",
+    x = "Week Ending", y = "Monitoring Site"
+  ) +
+  theme(
+    strip.text.y = element_text(angle = 0, face = "bold"), 
+    strip.background = element_rect(fill = "gray90"),
+    panel.grid = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    # Adjust this to add more or less breathing room between pathogens
+    panel.spacing.y = unit(0.5, "lines"),
+    legend.position = "bottom"
+  )
+
+```
+
+
