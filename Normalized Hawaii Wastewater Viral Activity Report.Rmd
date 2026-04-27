@@ -72,11 +72,43 @@ Filter date to = "Today" Date
 hawaii_dataset_clean <- hawaii_dataset %>%
   mutate(sample_collect_date = as.Date(sample_collect_date)) %>% 
   filter(
-    !is.na(pcr_target_avg_conc) & pcr_target_avg_conc != "",
+    #!is.na(pcr_target_avg_conc) & pcr_target_avg_conc != "",
     !is.na(pcr_target_flowpop_lin) & pcr_target_flowpop_lin != "",
     sample_collect_date <= Sys.Date()
+  ) %>%
+# 3. ADD YOUR FORMAL NAMES HERE
+mutate(
+  # Formalizing the site names
+  site_id = case_match(
+    site_id, 
+    "15001-003-01-00-00" ~ "Hilo WWTP",
+    "15003-002-01-00-00" ~ "Honouliuli WWTP",
+    "15003-001-01-00-00" ~ "Kailua WWTP",
+    "15001-001-01-00-00" ~ "Kaloko WWTP",
+    "15001-002-01-00-00" ~ "Kealakehe WWTP",
+    "15009-001-01-00-00" ~ "Kihei WW Reclamation",
+    "15009-002-01-00-00" ~ "Lahaina WW Reclamation",
+    "15007-001-01-00-00" ~ "Lihue WWTP",
+    "15007-002-01-00-00" ~ "Poipu Kai WWTP",
+    "15007-003-01-00-00" ~ "Princeville WWTP",
+    "15007-004-01-00-00" ~ "Puhi WWTP",
+    "15003-003-01-00-00" ~ "Sand Island WWTP",
+    "15003-005-01-00-00" ~ "Wahiawa WWTP",
+    "15003-004-01-00-00" ~ "Waianae WWTP",
+    "15009-004-01-00-00" ~ "Wailuku-Kahului WWTP",
+    .default = site_id # Good safety net
+  ),
+  
+  # Converting ZIP/FIPS prefixes to County names
+  county_names = case_match(
+    as.character(county_names),
+    "15001" ~ "Hawaii",
+    "15003" ~ "Honolulu",
+    "15007" ~ "Kauai",
+    "15009" ~ "Maui",
+    .default = as.character(county_names)
   )
-
+)
 
 ```
 
@@ -86,7 +118,7 @@ Trouble shooting for accurate data count
 omitted_df <- hawaii_dataset %>%
   mutate(sample_collect_date = as.Date(sample_collect_date)) %>%
   filter(
-    is.na(pcr_target_avg_conc) | pcr_target_avg_conc == "" |
+    # is.na(pcr_target_avg_conc) | pcr_target_avg_conc == "" |
     is.na(pcr_target_flowpop_lin) | pcr_target_flowpop_lin == "" |
     sample_collect_date > Sys.Date()   # future dates
   )
@@ -175,7 +207,7 @@ data <- hawaii_dataset_clean %>%
     sample_collect_date,
     pcr_target,
     # pcr_gene_target,
-    pcr_target_avg_conc,
+    # pcr_target_avg_conc,
     pcr_target_flowpop_lin, #normalize by flow rate and population
     lod_sewage,
     county_names,
@@ -183,10 +215,7 @@ data <- hawaii_dataset_clean %>%
     extraction_method,
     major_lab_method,
     key_plot_with_pcr_by_day,
-  ) %>%
-
-  # Drop rows missing concentration.
-  filter(!is.na(pcr_target_avg_conc))
+  ) 
 ```
 
 
@@ -429,7 +458,7 @@ remove_outliers <- function(data) {
   clean_df <- left_join(data, mean_std_ln, by = "site_id_with_pcr_source_mlm")
   
   # set z-score threshold
-  z_score_threshold <- 4
+  z_score_threshold <- 10
   
   # calculate and filter the Z-score, handling NA stddev and division by zero
   clean_df <- clean_df %>%
@@ -534,26 +563,27 @@ wval_v2 <- function(data, target) {
   
   all_final <- data %>%
     filter(pcr_target == target & population_served >= 3000) %>%
-    mutate(
-      # Mark if value is below detection limit
-      pcr_target_below_lod = if_else(pcr_target_avg_conc < lod_sewage, "yes", "no"), 
-      
-      # Mark if detected
-      pcr_target_detect    = if_else(pcr_target_avg_conc < lod_sewage, "no", "yes"),
-      
-      # Replace below-LOD values with LOD/2 (standard practice)
-      pcr_target_avg_conc_lin = if_else(
-        pcr_target_below_lod == "yes",
-        lod_sewage / 2,
-        pcr_target_avg_conc
-      ),
-      
-      # Log10 version (used in some calculations)
-      pcr_target_avg_conc_log10 = if_else(
-        pcr_target_below_lod == "yes",
-        log10(lod_sewage / 2),
-        log10(pcr_target_avg_conc_lin)
-      ),
+     mutate(
+      # # Mark if value is below detection limit
+      # pcr_target_below_lod = if_else(pcr_target_avg_conc < lod_sewage, "yes", "no"),
+      # 
+      # # Mark if detected
+      # pcr_target_detect    = if_else(pcr_target_avg_conc < lod_sewage, "no", "yes"),
+      # 
+      # # Replace below-LOD values with LOD/2 (standard practice)
+      # pcr_target_avg_conc_lin = if_else(
+      #   pcr_target_below_lod == "yes",
+      #   lod_sewage / 2,
+      #   pcr_target_flowpop_lin
+      # ),
+      # 
+      # # Log10 version (used in some calculations)
+      # pcr_target_avg_conc_log10 = if_else(
+      #   pcr_target_below_lod == "yes",
+      #   log10(lod_sewage / 2),
+      #   log10(pcr_target_avg_conc_lin)
+      # ),
+      # 
       
     
       # Natural log version (used for WVAL math)
@@ -561,7 +591,8 @@ wval_v2 <- function(data, target) {
       
       # Extract year from date
       year = year(sample_collect_date)
-    )
+     )
+    
   
   
   # =========================================================
@@ -986,8 +1017,8 @@ wval_v2 <- function(data, target) {
         
         reframe(
           site_id = first(site_id),
-          mean_pcr_target_flowpop_lin = mean(pcr_target_flowpop_lin, na.rm = TRUE),
-          all_pcr_target_flowpop_lin = paste(pcr_target_flowpop_lin, collapse = ", "),
+          mean_pcr_target_flowpop_ln = mean(pcr_target_flowpop_ln, na.rm = TRUE),
+          all_pcr_target_flowpop_ln = paste(pcr_target_flowpop_ln, collapse = ", "),
           wval_site_wk = mean(ww_index_ln_lin, na.rm = TRUE),
           all_sample_collect_dates = paste(sample_collect_date, collapse = ", "),
           days_since_first_sample = last(days_since_first_sample),
@@ -995,7 +1026,7 @@ wval_v2 <- function(data, target) {
           last_baseline_ln = last(last_baseline_ln),
           last_std_ln = last(last_std_ln),
           std_avg_conc_ln = last(std_avg_conc_ln),
-          pcr_target_below_lod = first(pcr_target_below_lod),
+          #pcr_target_below_lod = first(pcr_target_below_lod),
           pcr_target = first(pcr_target),
           all_ww_index_ln_lin = paste(ww_index_ln_lin, collapse = ", "),
           # all_sample_ids = paste(sample_id, collapse = ", "),
@@ -1079,7 +1110,7 @@ required_columns <- c(
   "sample_collect_date",
   "pcr_target",
   # "pcr_gene_target",
-  "pcr_target_avg_conc",
+  # "pcr_target_avg_conc",
   "pcr_target_flowpop_lin",
   "lod_sewage",
   "county_names",
@@ -1379,4 +1410,6 @@ write.csv(state_wval_rsv,      "norm_state_wval_rsv.csv",  row.names = FALSE)
 # write.csv(intermediate_result, "norm_intermediate_wval.csv", row.names = FALSE)
 
 ```
+
+
 
