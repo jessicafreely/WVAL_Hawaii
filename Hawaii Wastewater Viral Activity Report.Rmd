@@ -59,6 +59,8 @@ p_load(
 # Example: this will need to be changed for each person, i didn't realize it would be complicated to get a file from share point
  hawaii_dataset <- read_csv("C:/Users/jessica.freely/OneDrive - State of Hawaii/Desktop/WW Epi/DSTT Cohort 6/GitHub/WVAL_Hawaii_GitHub/contour-export-NWSS-Analyzed-CDC-Commercial-Export.csv")
 
+hawaii_dataset_sld <- Wastewater_Data_Hawaii_Internal
+
 # Example placeholder only:
 # hawaii_dataset <- read_csv("file_path.csv")
 ```
@@ -97,8 +99,11 @@ mutate(
     "15003-005-01-00-00" ~ "Wahiawa WWTP",
     "15003-004-01-00-00" ~ "Waianae WWTP",
     "15009-004-01-00-00" ~ "Wailuku-Kahului WWTP",
+    
+    
     .default = site_id # Good safety net
   ),
+  
   
   # Converting ZIP/FIPS prefixes to County names
   county_names = case_match(
@@ -183,7 +188,7 @@ data <- hawaii_dataset_clean %>%
     key_plot_with_pcr_by_day = paste(
       wwtp_jurisdiction,
       wwtp_name,
-      site_id,
+      site_id, #don't have this is sld data...what happens if we take it out?
       sample_location,
       sample_location_specify,
       sample_matrix,
@@ -199,9 +204,9 @@ data <- hawaii_dataset_clean %>%
   # Keep the fields the downstream code expects.
   select(
     wwtp_jurisdiction,
-    source,
+    source, 
     lab_id,
-    site_id,
+    site_id, 
     wwtp_name,
     population_served,
     sample_id,
@@ -451,6 +456,8 @@ make_key_plot_with_pcr <- function(df) {
 # site/pathogen/source/method combination.
 # ------------------------------------------------------------
 
+head('site_id_with_pcr_source_mlm')
+
 remove_outliers <- function(data) {
   # calculate mean and standard deviation for each site_lab_norm combo
   mean_std_ln <- data %>%
@@ -460,6 +467,8 @@ remove_outliers <- function(data) {
       stddev_avg_conc_ln = sd(pcr_target_avg_conc_ln, na.rm = TRUE)) 
   
   clean_df <- left_join(data, mean_std_ln, by = "site_id_with_pcr_source_mlm")
+  
+  
   
   # set z-score threshold
   z_score_threshold <- 4
